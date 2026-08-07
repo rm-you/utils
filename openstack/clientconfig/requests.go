@@ -1356,9 +1356,6 @@ func newWebSSOProviderClient(ctx context.Context, cloud *Cloud, opts *ClientOpts
 		TokenCache:           opts.TokenCache,
 		CacheNamespace:       opts.TokenCacheNamespace,
 	}
-	if webssoOpts.CacheNamespace == "" {
-		webssoOpts.CacheNamespace = opts.Cloud
-	}
 
 	err = openstack.AuthenticateV3(ctx, pClient, webssoOpts, gophercloud.EndpointOpts{})
 	if err != nil {
