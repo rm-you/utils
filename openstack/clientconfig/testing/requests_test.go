@@ -115,6 +115,21 @@ func TestWebSSOCacheNamespaceUsesExplicitCloud(t *testing.T) {
 	}
 }
 
+func TestWebSSORedirectOptionsFromYAML(t *testing.T) {
+	var cloud clientconfig.Cloud
+	err := yaml.Unmarshal([]byte(`
+auth:
+  redirect_host: 127.0.0.1
+  redirect_port: 9991
+`), &cloud)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cloud.AuthInfo.RedirectHost != "127.0.0.1" || cloud.AuthInfo.RedirectPort != 9991 {
+		t.Fatalf("unexpected redirect options: %#v", cloud.AuthInfo)
+	}
+}
+
 func TestMain(m *testing.M) {
 	// Isolate tests from the caller's OpenStack environment.
 	saved := map[string]string{}

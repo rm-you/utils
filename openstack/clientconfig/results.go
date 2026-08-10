@@ -175,11 +175,11 @@ type AuthInfo struct {
 	// DiscoveryEndpoint supplies AccessTokenEndpoint through OIDC discovery.
 	DiscoveryEndpoint string `yaml:"discovery_endpoint,omitempty" json:"discovery_endpoint,omitempty"`
 
-	// WebSSOCallbackPort defaults to 9990.
-	WebSSOCallbackPort int `yaml:"websso_callback_port,omitempty" json:"websso_callback_port,omitempty"`
+	// RedirectPort is the local WebSSO callback port. It defaults to 9990.
+	RedirectPort int `yaml:"redirect_port,omitempty" json:"redirect_port,omitempty"`
 
-	// WebSSOCallbackHost is the loopback host used for the browser callback.
-	WebSSOCallbackHost string `yaml:"websso_callback_host,omitempty" json:"websso_callback_host,omitempty"`
+	// RedirectHost is the loopback host used for the WebSSO callback.
+	RedirectHost string `yaml:"redirect_host,omitempty" json:"redirect_host,omitempty"`
 }
 
 // Region represents a region included as part of cloud in clouds.yaml

@@ -1079,13 +1079,18 @@ func isOIDCClientCredentials(cloud *Cloud) bool {
 }
 
 func resolveAuthInfo(cloud *Cloud, opts *ClientOpts) *AuthInfo {
+	var authInfo *AuthInfo
 	if cloud.AuthInfo != nil {
-		return cloud.AuthInfo
+		authInfo = cloud.AuthInfo
+	} else if opts.AuthInfo != nil {
+		authInfo = opts.AuthInfo
 	}
-	if opts.AuthInfo != nil {
-		return opts.AuthInfo
+	if authInfo == nil {
+		return new(AuthInfo)
 	}
-	return new(AuthInfo)
+
+	effectiveAuthInfo := *authInfo
+	return &effectiveAuthInfo
 }
 
 func buildOIDCScope(authInfo *AuthInfo) tokens.Scope {
@@ -1096,9 +1101,10 @@ func buildOIDCScope(authInfo *AuthInfo) tokens.Scope {
 		return tokens.Scope{ProjectID: authInfo.ProjectID}
 	}
 	if authInfo.ProjectName != "" {
-		domainCloud := setDomainIfNeeded(&Cloud{AuthInfo: authInfo})
+		effectiveAuthInfo := *authInfo
+		domainCloud := setDomainIfNeeded(&Cloud{AuthInfo: &effectiveAuthInfo})
 		return tokens.Scope{
-			ProjectName: authInfo.ProjectName,
+			ProjectName: effectiveAuthInfo.ProjectName,
 			DomainID:    domainCloud.AuthInfo.ProjectDomainID,
 			DomainName:  domainCloud.AuthInfo.ProjectDomainName,
 		}
@@ -1332,6 +1338,20 @@ func newWebSSOProviderClient(ctx context.Context, cloud *Cloud, opts *ClientOpts
 			authInfo.Protocol = v
 		}
 	}
+	if authInfo.RedirectHost == "" {
+		if v := env.Getenv(envPrefix + "REDIRECT_HOST"); v != "" {
+			authInfo.RedirectHost = v
+		}
+	}
+	if authInfo.RedirectPort == 0 {
+		if v := env.Getenv(envPrefix + "REDIRECT_PORT"); v != "" {
+			port, err := strconv.Atoi(v)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse %sREDIRECT_PORT: %w", envPrefix, err)
+			}
+			authInfo.RedirectPort = port
+		}
+	}
 
 	if authInfo.AuthURL == "" {
 		return nil, gophercloud.ErrMissingInput{Argument: "auth_url"}
@@ -1349,8 +1369,8 @@ func newWebSSOProviderClient(ctx context.Context, cloud *Cloud, opts *ClientOpts
 		Protocol:             authInfo.Protocol,
 		Scope:                buildOIDCScope(authInfo),
 		AllowReauth:          authInfo.AllowReauth,
-		CallbackPort:         authInfo.WebSSOCallbackPort,
-		CallbackHost:         authInfo.WebSSOCallbackHost,
+		RedirectPort:         authInfo.RedirectPort,
+		RedirectHost:         authInfo.RedirectHost,
 		Timeout:              opts.WebSSOTimeout,
 		BrowserOpener:        opts.WebSSOBrowserOpener,
 		TokenCache:           opts.TokenCache,
