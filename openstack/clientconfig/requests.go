@@ -10,9 +10,15 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack"
+	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/oauth2mtls"
+	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/oidc"
+	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/tokencache"
+	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/tokens"
+	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/websso"
 	"github.com/gophercloud/utils/v2/env"
 	"github.com/gophercloud/utils/v2/gnocchi"
 	"github.com/gophercloud/utils/v2/internal"
@@ -43,6 +49,16 @@ const (
 
 	// AuthV3ApplicationCredential defines version 3 of the application credential
 	AuthV3ApplicationCredential AuthType = "v3applicationcredential"
+
+	// AuthV3OIDCClientCredentials defines version 3 of the OIDC client credentials
+	AuthV3OIDCClientCredentials AuthType = "v3oidcclientcredentials"
+
+	// AuthV3WebSSO defines version 3 of the WebSSO browser-based federation auth
+	AuthV3WebSSO AuthType = "v3websso"
+
+	// AuthV3OAuth2MTLSClientCredential defines version 3 of the OAuth2 mTLS
+	// client credentials authentication via OS-OAUTH2.
+	AuthV3OAuth2MTLSClientCredential AuthType = "v3oauth2mtlsclientcredential"
 )
 
 // ClientOpts represents options to customize the way a client is
@@ -74,6 +90,18 @@ type ClientOpts struct {
 	// HTTPClient provides the ability customize the ProviderClient's
 	// internal HTTP client.
 	HTTPClient *http.Client
+
+	// TokenCache enables OIDC and WebSSO token reuse.
+	TokenCache tokencache.Cache
+
+	// TokenCacheNamespace identifies the WebSSO profile. It defaults to Cloud.
+	TokenCacheNamespace string
+
+	// WebSSOBrowserOpener overrides the default operating system browser.
+	WebSSOBrowserOpener func(string) error
+
+	// WebSSOTimeout limits browser authentication. Zero uses the default.
+	WebSSOTimeout time.Duration
 
 	// YAMLOpts provides the ability to pass a customized set
 	// of options and methods for loading the YAML file.
@@ -341,7 +369,8 @@ func GetCloudFromYAML(opts *ClientOpts) (*Cloud, error) {
 // settings found in a specific cloud entry of a clouds.yaml file or
 // based on authentication settings given in ClientOpts.
 //
-// This attempts to be a single point of entry for all OpenStack authentication.
+// Specialized authentication types are handled by AuthenticatedClient and
+// NewServiceClient.
 //
 // See http://docs.openstack.org/developer/os-client-config and
 // https://github.com/openstack/os-client-config/blob/master/os_client_config/config.py.
@@ -445,6 +474,12 @@ func determineIdentityAPI(cloud *Cloud, opts *ClientOpts) string {
 		case AuthV3Token:
 			identityAPI = "3"
 		case AuthV3ApplicationCredential:
+			identityAPI = "3"
+		case AuthV3OIDCClientCredentials:
+			identityAPI = "3"
+		case AuthV3WebSSO:
+			identityAPI = "3"
+		case AuthV3OAuth2MTLSClientCredential:
 			identityAPI = "3"
 		}
 	}
@@ -739,12 +774,48 @@ func v3auth(cloud *Cloud, opts *ClientOpts) (*gophercloud.AuthOptions, error) {
 // AuthenticatedClient is a convenience function to get a new provider client
 // based on a clouds.yaml entry.
 func AuthenticatedClient(ctx context.Context, opts *ClientOpts) (*gophercloud.ProviderClient, error) {
-	ao, err := AuthOptions(opts)
+	opts, cloud, envPrefix, tlsConfig, err := prepareProviderClient(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	return openstack.AuthenticatedClient(ctx, *ao)
+	return newProviderClient(ctx, cloud, opts, envPrefix, tlsConfig)
+}
+
+func prepareProviderClient(opts *ClientOpts) (*ClientOpts, *Cloud, string, *tls.Config, error) {
+	if opts == nil {
+		opts = new(ClientOpts)
+	}
+
+	cloud := new(Cloud)
+	envPrefix := "OS_"
+	if opts.EnvPrefix != "" {
+		envPrefix = opts.EnvPrefix
+	}
+
+	cloudName := opts.Cloud
+	if cloudName == "" {
+		cloudName = env.Getenv(envPrefix + "CLOUD")
+	}
+	if opts.TokenCache != nil && opts.TokenCacheNamespace == "" && cloudName != "" {
+		effectiveOpts := *opts
+		effectiveOpts.TokenCacheNamespace = cloudName
+		opts = &effectiveOpts
+	}
+	if cloudName != "" {
+		var err error
+		cloud, err = GetCloudFromYAML(opts)
+		if err != nil {
+			return nil, nil, "", nil, err
+		}
+	}
+
+	tlsConfig, err := PrepareTLSConfig(envPrefix, cloud)
+	if err != nil {
+		return nil, nil, "", nil, err
+	}
+
+	return opts, cloud, envPrefix, tlsConfig, nil
 }
 
 // PrepareTLSConfig builds a *tls.Config from environment variables and cloud
@@ -805,67 +876,13 @@ func PrepareTLSConfig(envPrefix string, cloud *Cloud) (*tls.Config, error) {
 
 // NewServiceClient is a convenience function to get a new service client.
 func NewServiceClient(ctx context.Context, service string, opts *ClientOpts) (*gophercloud.ServiceClient, error) {
-	cloud := new(Cloud)
-
-	// If no opts were passed in, create an empty ClientOpts.
-	if opts == nil {
-		opts = new(ClientOpts)
-	}
-
-	// Determine if a clouds.yaml entry should be retrieved.
-	// Start by figuring out the cloud name.
-	// First check if one was explicitly specified in opts.
-	var cloudName string
-	if opts.Cloud != "" {
-		cloudName = opts.Cloud
-	}
-
-	// Next see if a cloud name was specified as an environment variable.
-	envPrefix := "OS_"
-	if opts.EnvPrefix != "" {
-		envPrefix = opts.EnvPrefix
-	}
-
-	if v := env.Getenv(envPrefix + "CLOUD"); v != "" {
-		cloudName = v
-	}
-
-	// If a cloud name was determined, try to look it up in clouds.yaml.
-	if cloudName != "" {
-		// Get the requested cloud.
-		var err error
-		cloud, err = GetCloudFromYAML(opts)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	tlsConfig, err := PrepareTLSConfig(envPrefix, cloud)
+	opts, cloud, envPrefix, tlsConfig, err := prepareProviderClient(opts)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get a Provider Client
-	ao, err := AuthOptions(opts)
-	if err != nil {
-		return nil, err
-	}
-	pClient, err := openstack.NewClient(ao.IdentityEndpoint)
-	if err != nil {
-		return nil, err
-	}
-
-	// If an HTTPClient was specified, use it.
-	if opts.HTTPClient != nil {
-		pClient.HTTPClient = *opts.HTTPClient
-	} else {
-		// Otherwise create a new HTTP client with the generated TLS config.
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.TLSClientConfig = tlsConfig
-		pClient.HTTPClient = http.Client{Transport: transport}
-	}
-
-	err = openstack.Authenticate(ctx, pClient, *ao)
+	pClient, err := newProviderClient(ctx, cloud, opts, envPrefix, tlsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -913,21 +930,21 @@ func NewServiceClient(ctx context.Context, service string, opts *ClientOpts) (*g
 
 	switch service {
 	case "baremetal":
-		return openstack.NewBareMetalV1(pClient, eo)
+		return openstack.NewBareMetalV1(ctx, pClient, eo)
 	case "baremetal-introspection":
-		return openstack.NewBareMetalIntrospectionV1(pClient, eo)
+		return openstack.NewBareMetalIntrospectionV1(ctx, pClient, eo)
 	case "compute":
-		return openstack.NewComputeV2(pClient, eo)
+		return openstack.NewComputeV2(ctx, pClient, eo)
 	case "container":
-		return openstack.NewContainerV1(pClient, eo)
+		return openstack.NewContainerV1(ctx, pClient, eo)
 	case "container-infra":
-		return openstack.NewContainerInfraV1(pClient, eo)
+		return openstack.NewContainerInfraV1(ctx, pClient, eo)
 	case "database":
-		return openstack.NewDBV1(pClient, eo)
+		return openstack.NewDBV1(ctx, pClient, eo)
 	case "dns":
-		return openstack.NewDNSV2(pClient, eo)
+		return openstack.NewDNSV2(ctx, pClient, eo)
 	case "gnocchi":
-		return gnocchi.NewGnocchiV1(pClient, eo)
+		return gnocchi.NewGnocchiV1(ctx, pClient, eo)
 	case "identity":
 		identityVersion := "3"
 		if v := cloud.IdentityAPIVersion; v != "" {
@@ -936,34 +953,34 @@ func NewServiceClient(ctx context.Context, service string, opts *ClientOpts) (*g
 
 		switch identityVersion {
 		case "v2", "2", "2.0":
-			return openstack.NewIdentityV2(pClient, eo)
+			return openstack.NewIdentityV2(ctx, pClient, eo)
 		case "v3", "3":
-			return openstack.NewIdentityV3(pClient, eo)
+			return openstack.NewIdentityV3(ctx, pClient, eo)
 		default:
 			return nil, fmt.Errorf("invalid identity API version")
 		}
 	case "image":
-		return openstack.NewImageV2(pClient, eo)
+		return openstack.NewImageV2(ctx, pClient, eo)
 	case "key-manager":
-		return openstack.NewKeyManagerV1(pClient, eo)
+		return openstack.NewKeyManagerV1(ctx, pClient, eo)
 	case "load-balancer":
-		return openstack.NewLoadBalancerV2(pClient, eo)
+		return openstack.NewLoadBalancerV2(ctx, pClient, eo)
 	case "messaging":
 		clientID, err := uuid.NewV4()
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate UUID: %w", err)
 		}
-		return openstack.NewMessagingV2(pClient, clientID.String(), eo)
+		return openstack.NewMessagingV2(ctx, pClient, clientID.String(), eo)
 	case "network":
-		return openstack.NewNetworkV2(pClient, eo)
+		return openstack.NewNetworkV2(ctx, pClient, eo)
 	case "object-store":
-		return openstack.NewObjectStorageV1(pClient, eo)
+		return openstack.NewObjectStorageV1(ctx, pClient, eo)
 	case "orchestration":
-		return openstack.NewOrchestrationV1(pClient, eo)
+		return openstack.NewOrchestrationV1(ctx, pClient, eo)
 	case "placement":
-		return openstack.NewPlacementV1(pClient, eo)
+		return openstack.NewPlacementV1(ctx, pClient, eo)
 	case "sharev2":
-		return openstack.NewSharedFileSystemV2(pClient, eo)
+		return openstack.NewSharedFileSystemV2(ctx, pClient, eo)
 	case "volume":
 		volumeVersion := "3"
 		if v := cloud.VolumeAPIVersion; v != "" {
@@ -972,16 +989,16 @@ func NewServiceClient(ctx context.Context, service string, opts *ClientOpts) (*g
 
 		switch volumeVersion {
 		case "v1", "1":
-			return openstack.NewBlockStorageV1(pClient, eo)
+			return openstack.NewBlockStorageV1(ctx, pClient, eo)
 		case "v2", "2":
-			return openstack.NewBlockStorageV2(pClient, eo)
+			return openstack.NewBlockStorageV2(ctx, pClient, eo)
 		case "v3", "3":
-			return openstack.NewBlockStorageV3(pClient, eo)
+			return openstack.NewBlockStorageV3(ctx, pClient, eo)
 		default:
 			return nil, fmt.Errorf("invalid volume API version")
 		}
 	case "workflowv2":
-		return openstack.NewWorkflowV2(pClient, eo)
+		return openstack.NewWorkflowV2(ctx, pClient, eo)
 	}
 
 	return nil, fmt.Errorf("unable to create a service client for %s", service)
@@ -1045,4 +1062,308 @@ func isApplicationCredential(authInfo *AuthInfo) bool {
 		return false
 	}
 	return true
+}
+
+func isOIDCClientCredentials(cloud *Cloud) bool {
+	if cloud.AuthType == AuthV3OIDCClientCredentials {
+		return true
+	}
+	if cloud.AuthInfo != nil &&
+		cloud.AuthInfo.ClientID != "" &&
+		cloud.AuthInfo.IdentityProvider != "" &&
+		cloud.AuthInfo.Protocol != "" &&
+		(cloud.AuthInfo.AccessTokenEndpoint != "" || cloud.AuthInfo.DiscoveryEndpoint != "") {
+		return true
+	}
+	return false
+}
+
+func resolveAuthInfo(cloud *Cloud, opts *ClientOpts) *AuthInfo {
+	if cloud.AuthInfo != nil {
+		return cloud.AuthInfo
+	}
+	if opts.AuthInfo != nil {
+		return opts.AuthInfo
+	}
+	return new(AuthInfo)
+}
+
+func buildOIDCScope(authInfo *AuthInfo) tokens.Scope {
+	if authInfo.TrustID != "" {
+		return tokens.Scope{TrustID: authInfo.TrustID}
+	}
+	if authInfo.ProjectID != "" {
+		return tokens.Scope{ProjectID: authInfo.ProjectID}
+	}
+	if authInfo.ProjectName != "" {
+		domainCloud := setDomainIfNeeded(&Cloud{AuthInfo: authInfo})
+		return tokens.Scope{
+			ProjectName: authInfo.ProjectName,
+			DomainID:    domainCloud.AuthInfo.ProjectDomainID,
+			DomainName:  domainCloud.AuthInfo.ProjectDomainName,
+		}
+	}
+	if authInfo.DomainID != "" {
+		return tokens.Scope{DomainID: authInfo.DomainID}
+	}
+	if authInfo.DomainName != "" {
+		return tokens.Scope{DomainName: authInfo.DomainName}
+	}
+	if authInfo.SystemScope != "" {
+		return tokens.Scope{System: true}
+	}
+	return tokens.Scope{}
+}
+
+func newProviderClient(ctx context.Context, cloud *Cloud, opts *ClientOpts, envPrefix string, tlsConfig *tls.Config) (*gophercloud.ProviderClient, error) {
+	effectiveCloud := *cloud
+	if effectiveCloud.AuthInfo == nil && opts.AuthInfo != nil {
+		effectiveCloud.AuthInfo = opts.AuthInfo
+	}
+	if v := env.Getenv(envPrefix + "AUTH_TYPE"); v != "" {
+		effectiveCloud.AuthType = AuthType(v)
+	}
+	if opts.AuthType != "" {
+		effectiveCloud.AuthType = opts.AuthType
+	}
+	cloud = &effectiveCloud
+
+	if cloud.AuthType == AuthV3WebSSO {
+		return newWebSSOProviderClient(ctx, cloud, opts, envPrefix, tlsConfig)
+	}
+	if cloud.AuthType == AuthV3OAuth2MTLSClientCredential {
+		return newOAuth2MTLSProviderClient(ctx, cloud, opts, envPrefix, tlsConfig)
+	}
+	if isOIDCClientCredentials(cloud) {
+		return newOIDCProviderClient(ctx, cloud, opts, envPrefix, tlsConfig)
+	}
+
+	ao, err := AuthOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	pClient, err := openstack.NewClient(ao.IdentityEndpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	configureHTTPClient(pClient, opts, tlsConfig)
+
+	err = openstack.Authenticate(ctx, pClient, *ao)
+	if err != nil {
+		return nil, err
+	}
+
+	return pClient, nil
+}
+
+func newOIDCProviderClient(ctx context.Context, cloud *Cloud, opts *ClientOpts, envPrefix string, tlsConfig *tls.Config) (*gophercloud.ProviderClient, error) {
+	authInfo := resolveAuthInfo(cloud, opts)
+
+	if authInfo.IdentityProvider == "" && cloud.IdentityProvider != "" {
+		authInfo.IdentityProvider = cloud.IdentityProvider
+	}
+	if authInfo.Protocol == "" && cloud.Protocol != "" {
+		authInfo.Protocol = cloud.Protocol
+	}
+
+	if authInfo.AuthURL == "" {
+		if v := env.Getenv(envPrefix + "AUTH_URL"); v != "" {
+			authInfo.AuthURL = v
+		}
+	}
+	if authInfo.ClientID == "" {
+		if v := env.Getenv(envPrefix + "CLIENT_ID"); v != "" {
+			authInfo.ClientID = v
+		}
+	}
+	if authInfo.ClientSecret == "" {
+		if v := env.Getenv(envPrefix + "CLIENT_SECRET"); v != "" {
+			authInfo.ClientSecret = v
+		}
+	}
+	if authInfo.AccessTokenEndpoint == "" {
+		if v := env.Getenv(envPrefix + "ACCESS_TOKEN_ENDPOINT"); v != "" {
+			authInfo.AccessTokenEndpoint = v
+		}
+	}
+	if authInfo.IdentityProvider == "" {
+		if v := env.Getenv(envPrefix + "IDENTITY_PROVIDER"); v != "" {
+			authInfo.IdentityProvider = v
+		}
+	}
+	if authInfo.Protocol == "" {
+		if v := env.Getenv(envPrefix + "PROTOCOL"); v != "" {
+			authInfo.Protocol = v
+		}
+	}
+	if authInfo.AccessTokenType == "" {
+		if v := env.Getenv(envPrefix + "ACCESS_TOKEN_TYPE"); v != "" {
+			authInfo.AccessTokenType = v
+		}
+	}
+	if authInfo.OpenIDScope == "" {
+		if v := env.Getenv(envPrefix + "OPENID_SCOPE"); v != "" {
+			authInfo.OpenIDScope = v
+		}
+	}
+	if authInfo.DiscoveryEndpoint == "" {
+		if v := env.Getenv(envPrefix + "DISCOVERY_ENDPOINT"); v != "" {
+			authInfo.DiscoveryEndpoint = v
+		}
+	}
+
+	if authInfo.AuthURL == "" {
+		return nil, gophercloud.ErrMissingInput{Argument: "auth_url"}
+	}
+
+	pClient, err := openstack.NewClient(authInfo.AuthURL)
+	if err != nil {
+		return nil, err
+	}
+
+	configureHTTPClient(pClient, opts, tlsConfig)
+
+	oidcOpts := &oidc.AuthOptions{
+		ClientID:             authInfo.ClientID,
+		ClientSecret:         authInfo.ClientSecret,
+		AccessTokenEndpoint:  authInfo.AccessTokenEndpoint,
+		DiscoveryEndpoint:    authInfo.DiscoveryEndpoint,
+		IdentityProviderName: authInfo.IdentityProvider,
+		Protocol:             authInfo.Protocol,
+		AccessTokenType:      authInfo.AccessTokenType,
+		Scope:                buildOIDCScope(authInfo),
+		AllowReauth:          authInfo.AllowReauth,
+		OIDCScope:            authInfo.OpenIDScope,
+		TokenCache:           opts.TokenCache,
+	}
+
+	err = openstack.AuthenticateV3(ctx, pClient, oidcOpts, gophercloud.EndpointOpts{})
+	if err != nil {
+		return nil, err
+	}
+
+	return pClient, nil
+}
+
+func newOAuth2MTLSProviderClient(ctx context.Context, cloud *Cloud, opts *ClientOpts, envPrefix string, tlsConfig *tls.Config) (*gophercloud.ProviderClient, error) {
+	authInfo := resolveAuthInfo(cloud, opts)
+
+	if authInfo.AuthURL == "" {
+		if v := env.Getenv(envPrefix + "AUTH_URL"); v != "" {
+			authInfo.AuthURL = v
+		}
+	}
+	clientID := authInfo.OAuth2ClientID
+	if clientID == "" {
+		clientID = authInfo.ClientID
+	}
+	if clientID == "" {
+		if v := env.Getenv(envPrefix + "OAUTH2_CLIENT_ID"); v != "" {
+			clientID = v
+		} else if v := env.Getenv(envPrefix + "CLIENT_ID"); v != "" {
+			clientID = v
+		}
+	}
+	if authInfo.OAuth2Endpoint == "" {
+		if v := env.Getenv(envPrefix + "OAUTH2_ENDPOINT"); v != "" {
+			authInfo.OAuth2Endpoint = v
+		}
+	}
+
+	if authInfo.AuthURL == "" {
+		return nil, gophercloud.ErrMissingInput{Argument: "auth_url"}
+	}
+	if clientID == "" {
+		return nil, gophercloud.ErrMissingInput{Argument: "oauth2_client_id"}
+	}
+
+	pClient, err := openstack.NewClient(authInfo.AuthURL)
+	if err != nil {
+		return nil, err
+	}
+
+	configureHTTPClient(pClient, opts, tlsConfig)
+
+	mtlsOpts := &oauth2mtls.AuthOptions{
+		OAuth2Endpoint: authInfo.OAuth2Endpoint,
+		ClientID:       clientID,
+		AllowReauth:    authInfo.AllowReauth,
+	}
+
+	err = openstack.AuthenticateV3(ctx, pClient, mtlsOpts, gophercloud.EndpointOpts{})
+	if err != nil {
+		return nil, err
+	}
+
+	return pClient, nil
+}
+
+func configureHTTPClient(pClient *gophercloud.ProviderClient, opts *ClientOpts, tlsConfig *tls.Config) {
+	if opts.HTTPClient != nil {
+		pClient.HTTPClient = *opts.HTTPClient
+	} else {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.TLSClientConfig = tlsConfig
+		pClient.HTTPClient = http.Client{Transport: transport}
+	}
+}
+
+func newWebSSOProviderClient(ctx context.Context, cloud *Cloud, opts *ClientOpts, envPrefix string, tlsConfig *tls.Config) (*gophercloud.ProviderClient, error) {
+	authInfo := resolveAuthInfo(cloud, opts)
+
+	if authInfo.AuthURL == "" {
+		if v := env.Getenv(envPrefix + "AUTH_URL"); v != "" {
+			authInfo.AuthURL = v
+		}
+	}
+	if authInfo.IdentityProvider == "" {
+		if cloud.IdentityProvider != "" {
+			authInfo.IdentityProvider = cloud.IdentityProvider
+		} else if v := env.Getenv(envPrefix + "IDENTITY_PROVIDER"); v != "" {
+			authInfo.IdentityProvider = v
+		}
+	}
+	if authInfo.Protocol == "" {
+		if cloud.Protocol != "" {
+			authInfo.Protocol = cloud.Protocol
+		} else if v := env.Getenv(envPrefix + "PROTOCOL"); v != "" {
+			authInfo.Protocol = v
+		}
+	}
+
+	if authInfo.AuthURL == "" {
+		return nil, gophercloud.ErrMissingInput{Argument: "auth_url"}
+	}
+
+	pClient, err := openstack.NewClient(authInfo.AuthURL)
+	if err != nil {
+		return nil, err
+	}
+
+	configureHTTPClient(pClient, opts, tlsConfig)
+
+	webssoOpts := &websso.AuthOptions{
+		IdentityProviderName: authInfo.IdentityProvider,
+		Protocol:             authInfo.Protocol,
+		Scope:                buildOIDCScope(authInfo),
+		AllowReauth:          authInfo.AllowReauth,
+		CallbackPort:         authInfo.WebSSOCallbackPort,
+		CallbackHost:         authInfo.WebSSOCallbackHost,
+		Timeout:              opts.WebSSOTimeout,
+		BrowserOpener:        opts.WebSSOBrowserOpener,
+		TokenCache:           opts.TokenCache,
+		CacheNamespace:       opts.TokenCacheNamespace,
+	}
+	if webssoOpts.CacheNamespace == "" {
+		webssoOpts.CacheNamespace = opts.Cloud
+	}
+
+	err = openstack.AuthenticateV3(ctx, pClient, webssoOpts, gophercloud.EndpointOpts{})
+	if err != nil {
+		return nil, err
+	}
+
+	return pClient, nil
 }

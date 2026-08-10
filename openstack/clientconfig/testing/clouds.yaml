@@ -170,3 +170,49 @@ clouds:
         values:
           auth:
             auth_url: "https://nowhere.example.com:5000/v3"
+  oregon:
+    auth_type: "v3oidcclientcredentials"
+    auth:
+      auth_url: "https://or.example.com:5000/v3"
+      client_id: "my-client-id"
+      client_secret: "my-client-secret"
+      access_token_endpoint: "https://idp.example.com/oauth2/token"
+      identity_provider: "myidp"
+      protocol: "openid"
+      project_name: "Some Project"
+      project_domain_name: "default"
+    region_name: "PDX"
+  washington:
+    auth_type: "v3oidcclientcredentials"
+    auth:
+      auth_url: "https://wa.example.com:5000/v3"
+      client_id: "wa-client-id"
+      client_secret: "wa-client-secret"
+      access_token_endpoint: "https://idp.example.com/oauth2/token"
+      identity_provider: "myidp"
+      protocol: "openid"
+      access_token_type: "id_token"
+      openid_scope: "openid profile"
+      project_id: "67890"
+    region_name: "SEA"
+  montana:
+    auth_type: "v3oidcclientcredentials"
+    auth:
+      auth_url: "https://mt.example.com:5000/v3"
+      client_id: "mt-client-id"
+      client_secret: "mt-client-secret"
+      discovery_endpoint: "https://idp.example.com/.well-known/openid-configuration"
+      identity_provider: "myidp"
+      protocol: "openid"
+      project_name: "Some Project"
+      project_domain_name: "default"
+    region_name: "BIL"
+  colorado:
+    auth_type: "v3oauth2mtlsclientcredential"
+    auth:
+      auth_url: "https://co.example.com:5000/v3"
+      client_id: "co-client-id"
+    cert: /home/myhome/client-cert.crt
+    key: /home/myhome/client-cert.key
+    cacert: /home/myhome/ca.crt
+    region_name: "COS"
