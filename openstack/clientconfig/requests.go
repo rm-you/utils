@@ -91,7 +91,7 @@ type ClientOpts struct {
 	// internal HTTP client.
 	HTTPClient *http.Client
 
-	// TokenCache enables OIDC and WebSSO token reuse.
+	// TokenCache enables WebSSO token reuse.
 	TokenCache tokencache.Cache
 
 	// TokenCacheNamespace identifies the WebSSO profile. It defaults to Cloud.
@@ -1242,7 +1242,6 @@ func newOIDCProviderClient(ctx context.Context, cloud *Cloud, opts *ClientOpts, 
 		Scope:                buildOIDCScope(authInfo),
 		AllowReauth:          authInfo.AllowReauth,
 		OIDCScope:            authInfo.OpenIDScope,
-		TokenCache:           opts.TokenCache,
 	}
 
 	err = openstack.AuthenticateV3(ctx, pClient, oidcOpts, gophercloud.EndpointOpts{})
