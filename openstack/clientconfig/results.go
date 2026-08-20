@@ -49,6 +49,10 @@ type Cloud struct {
 	// ClientKeyFile a path to a client key to use as part of the SSL
 	// transaction.
 	ClientKeyFile string `yaml:"key,omitempty" json:"key,omitempty"`
+
+	// IdentityProvider and Protocol may appear outside auth in clouds.yaml.
+	IdentityProvider string `yaml:"identity_provider,omitempty" json:"identity_provider,omitempty"`
+	Protocol         string `yaml:"protocol,omitempty" json:"protocol,omitempty"`
 }
 
 // AuthInfo represents the auth section of a cloud entry or
@@ -140,6 +144,42 @@ type AuthInfo struct {
 	// TrustID is used the authenticate using Keystone trusts.
 	// Must also provide trustee Username or UserID with Password and Domain.
 	TrustID string `yaml:"trust_id,omitempty" json:"trust_id,omitempty"`
+
+	// ClientID is the OAuth 2.0 client ID.
+	ClientID string `yaml:"client_id,omitempty" json:"client_id,omitempty"`
+
+	// ClientSecret is the OAuth 2.0 client secret.
+	ClientSecret string `yaml:"client_secret,omitempty" json:"client_secret,omitempty"`
+
+	// OAuth2ClientID overrides ClientID for Keystone OAuth2 authentication.
+	OAuth2ClientID string `yaml:"oauth2_client_id,omitempty" json:"oauth2_client_id,omitempty"`
+
+	// OAuth2Endpoint is Keystone's OS-OAUTH2 token endpoint.
+	OAuth2Endpoint string `yaml:"oauth2_endpoint,omitempty" json:"oauth2_endpoint,omitempty"`
+
+	// AccessTokenEndpoint is the identity provider's token endpoint.
+	AccessTokenEndpoint string `yaml:"access_token_endpoint,omitempty" json:"access_token_endpoint,omitempty"`
+
+	// IdentityProvider is the Keystone federation identity provider.
+	IdentityProvider string `yaml:"identity_provider,omitempty" json:"identity_provider,omitempty"`
+
+	// Protocol is the Keystone federation protocol.
+	Protocol string `yaml:"protocol,omitempty" json:"protocol,omitempty"`
+
+	// AccessTokenType selects the token response field. It defaults to "access_token".
+	AccessTokenType string `yaml:"access_token_type,omitempty" json:"access_token_type,omitempty"`
+
+	// OpenIDScope is the OAuth 2.0 scope. It defaults to "openid".
+	OpenIDScope string `yaml:"openid_scope,omitempty" json:"openid_scope,omitempty"`
+
+	// DiscoveryEndpoint supplies AccessTokenEndpoint through OIDC discovery.
+	DiscoveryEndpoint string `yaml:"discovery_endpoint,omitempty" json:"discovery_endpoint,omitempty"`
+
+	// RedirectPort is the local WebSSO callback port. It defaults to 9990.
+	RedirectPort int `yaml:"redirect_port,omitempty" json:"redirect_port,omitempty"`
+
+	// RedirectHost is the loopback host used for the WebSSO callback.
+	RedirectHost string `yaml:"redirect_host,omitempty" json:"redirect_host,omitempty"`
 }
 
 // Region represents a region included as part of cloud in clouds.yaml

@@ -596,3 +596,184 @@ var LegacyCloudYAML = clientconfig.Clouds{
 		"yukon":   YukonCloudYAML,
 	},
 }
+
+var OregonCloudYAML = clientconfig.Cloud{
+	RegionName: "PDX",
+	AuthType:   clientconfig.AuthV3OIDCClientCredentials,
+	AuthInfo: &clientconfig.AuthInfo{
+		AuthURL:             "https://or.example.com:5000/v3",
+		ClientID:            "my-client-id",
+		ClientSecret:        "my-client-secret",
+		AccessTokenEndpoint: "https://idp.example.com/oauth2/token",
+		IdentityProvider:    "myidp",
+		Protocol:            "openid",
+		ProjectName:         "Some Project",
+		ProjectDomainName:   "default",
+	},
+	Verify: &iTrue,
+}
+
+var OregonClientOpts = &clientconfig.ClientOpts{
+	AuthInfo: &clientconfig.AuthInfo{
+		AuthURL:             "https://or.example.com:5000/v3",
+		ClientID:            "my-client-id",
+		ClientSecret:        "my-client-secret",
+		AccessTokenEndpoint: "https://idp.example.com/oauth2/token",
+		IdentityProvider:    "myidp",
+		Protocol:            "openid",
+		ProjectName:         "Some Project",
+		ProjectDomainName:   "default",
+	},
+}
+
+var OregonEnvAuth = map[string]string{
+	"OS_AUTH_URL":              "https://or.example.com:5000/v3",
+	"OS_CLIENT_ID":             "my-client-id",
+	"OS_CLIENT_SECRET":         "my-client-secret",
+	"OS_ACCESS_TOKEN_ENDPOINT": "https://idp.example.com/oauth2/token",
+	"OS_IDENTITY_PROVIDER":     "myidp",
+	"OS_PROTOCOL":              "openid",
+	"OS_PROJECT_NAME":          "Some Project",
+	"OS_PROJECT_DOMAIN_NAME":   "default",
+}
+
+// OregonAuthOpts is the expected standard auth configuration for Oregon.
+var OregonAuthOpts = &gophercloud.AuthOptions{
+	Scope: &gophercloud.AuthScope{
+		ProjectName: "Some Project",
+		DomainName:  "default",
+	},
+	IdentityEndpoint: "https://or.example.com:5000/v3",
+	TenantName:       "Some Project",
+}
+
+var WashingtonCloudYAML = clientconfig.Cloud{
+	RegionName: "SEA",
+	AuthType:   clientconfig.AuthV3OIDCClientCredentials,
+	AuthInfo: &clientconfig.AuthInfo{
+		AuthURL:             "https://wa.example.com:5000/v3",
+		ClientID:            "wa-client-id",
+		ClientSecret:        "wa-client-secret",
+		AccessTokenEndpoint: "https://idp.example.com/oauth2/token",
+		IdentityProvider:    "myidp",
+		Protocol:            "openid",
+		AccessTokenType:     "id_token",
+		OpenIDScope:         "openid profile",
+		ProjectID:           "67890",
+	},
+	Verify: &iTrue,
+}
+
+var WashingtonClientOpts = &clientconfig.ClientOpts{
+	AuthInfo: &clientconfig.AuthInfo{
+		AuthURL:             "https://wa.example.com:5000/v3",
+		ClientID:            "wa-client-id",
+		ClientSecret:        "wa-client-secret",
+		AccessTokenEndpoint: "https://idp.example.com/oauth2/token",
+		IdentityProvider:    "myidp",
+		Protocol:            "openid",
+		AccessTokenType:     "id_token",
+		OpenIDScope:         "openid profile",
+		ProjectID:           "67890",
+	},
+}
+
+var WashingtonEnvAuth = map[string]string{
+	"OS_AUTH_URL":              "https://wa.example.com:5000/v3",
+	"OS_CLIENT_ID":             "wa-client-id",
+	"OS_CLIENT_SECRET":         "wa-client-secret",
+	"OS_ACCESS_TOKEN_ENDPOINT": "https://idp.example.com/oauth2/token",
+	"OS_IDENTITY_PROVIDER":     "myidp",
+	"OS_PROTOCOL":              "openid",
+	"OS_ACCESS_TOKEN_TYPE":     "id_token",
+	"OS_OPENID_SCOPE":          "openid profile",
+	"OS_PROJECT_ID":            "67890",
+}
+
+var WashingtonAuthOpts = &gophercloud.AuthOptions{
+	Scope: &gophercloud.AuthScope{
+		ProjectID: "67890",
+	},
+	IdentityEndpoint: "https://wa.example.com:5000/v3",
+	TenantID:         "67890",
+}
+
+var MontanaCloudYAML = clientconfig.Cloud{
+	RegionName: "BIL",
+	AuthType:   clientconfig.AuthV3OIDCClientCredentials,
+	AuthInfo: &clientconfig.AuthInfo{
+		AuthURL:           "https://mt.example.com:5000/v3",
+		ClientID:          "mt-client-id",
+		ClientSecret:      "mt-client-secret",
+		DiscoveryEndpoint: "https://idp.example.com/.well-known/openid-configuration",
+		IdentityProvider:  "myidp",
+		Protocol:          "openid",
+		ProjectName:       "Some Project",
+		ProjectDomainName: "default",
+	},
+	Verify: &iTrue,
+}
+
+var MontanaClientOpts = &clientconfig.ClientOpts{
+	AuthInfo: &clientconfig.AuthInfo{
+		AuthURL:           "https://mt.example.com:5000/v3",
+		ClientID:          "mt-client-id",
+		ClientSecret:      "mt-client-secret",
+		DiscoveryEndpoint: "https://idp.example.com/.well-known/openid-configuration",
+		IdentityProvider:  "myidp",
+		Protocol:          "openid",
+		ProjectName:       "Some Project",
+		ProjectDomainName: "default",
+	},
+}
+
+var MontanaEnvAuth = map[string]string{
+	"OS_AUTH_URL":            "https://mt.example.com:5000/v3",
+	"OS_CLIENT_ID":           "mt-client-id",
+	"OS_CLIENT_SECRET":       "mt-client-secret",
+	"OS_DISCOVERY_ENDPOINT":  "https://idp.example.com/.well-known/openid-configuration",
+	"OS_IDENTITY_PROVIDER":   "myidp",
+	"OS_PROTOCOL":            "openid",
+	"OS_PROJECT_NAME":        "Some Project",
+	"OS_PROJECT_DOMAIN_NAME": "default",
+}
+
+var MontanaAuthOpts = &gophercloud.AuthOptions{
+	Scope: &gophercloud.AuthScope{
+		ProjectName: "Some Project",
+		DomainName:  "default",
+	},
+	IdentityEndpoint: "https://mt.example.com:5000/v3",
+	TenantName:       "Some Project",
+}
+
+var ColoradoCloudYAML = clientconfig.Cloud{
+	RegionName: "COS",
+	AuthType:   clientconfig.AuthV3OAuth2MTLSClientCredential,
+	AuthInfo: &clientconfig.AuthInfo{
+		AuthURL:  "https://co.example.com:5000/v3",
+		ClientID: "co-client-id",
+	},
+	Verify:         &iTrue,
+	ClientCertFile: "/home/myhome/client-cert.crt",
+	ClientKeyFile:  "/home/myhome/client-cert.key",
+	CACertFile:     "/home/myhome/ca.crt",
+}
+
+var ColoradoClientOpts = &clientconfig.ClientOpts{
+	AuthInfo: &clientconfig.AuthInfo{
+		AuthURL:  "https://co.example.com:5000/v3",
+		ClientID: "co-client-id",
+	},
+}
+
+var ColoradoEnvAuth = map[string]string{
+	"OS_AUTH_URL":  "https://co.example.com:5000/v3",
+	"OS_CLIENT_ID": "co-client-id",
+}
+
+// ColoradoAuthOpts is the expected standard auth configuration for Colorado.
+var ColoradoAuthOpts = &gophercloud.AuthOptions{
+	Scope:            &gophercloud.AuthScope{},
+	IdentityEndpoint: "https://co.example.com:5000/v3",
+}

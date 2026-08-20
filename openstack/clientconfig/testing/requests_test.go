@@ -1,17 +1,153 @@
 package testing
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gophercloud/gophercloud/v2"
+	"github.com/gophercloud/gophercloud/v2/openstack/identity/v3/websso"
 	"github.com/gophercloud/utils/v2/openstack/clientconfig"
 
 	th "github.com/gophercloud/gophercloud/v2/testhelper"
 	yaml "gopkg.in/yaml.v3"
 )
+
+func TestSpecializedAuthDispatchFromClientOpts(t *testing.T) {
+	tests := []struct {
+		name     string
+		authType clientconfig.AuthType
+		wantErr  string
+	}{
+		{name: "OIDC", authType: clientconfig.AuthV3OIDCClientCredentials, wantErr: "IdentityProviderName"},
+		{name: "WebSSO", authType: clientconfig.AuthV3WebSSO, wantErr: "IdentityProviderName"},
+		{name: "OAuth2 mTLS", authType: clientconfig.AuthV3OAuth2MTLSClientCredential, wantErr: "client_id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &clientconfig.ClientOpts{
+				AuthType: tt.authType,
+				AuthInfo: &clientconfig.AuthInfo{
+					AuthURL: "http://127.0.0.1:1/v3/",
+				},
+			}
+
+			_, err := clientconfig.NewServiceClient(context.Background(), "compute", opts)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("NewServiceClient did not use %s auth: %v", tt.name, err)
+			}
+
+			_, err = clientconfig.AuthenticatedClient(context.Background(), opts)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("AuthenticatedClient did not use %s auth: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+type staticYAMLOpts map[string]clientconfig.Cloud
+
+func (opts staticYAMLOpts) LoadCloudsYAML() (map[string]clientconfig.Cloud, error) {
+	return opts, nil
+}
+
+func (staticYAMLOpts) LoadSecureCloudsYAML() (map[string]clientconfig.Cloud, error) {
+	return nil, nil
+}
+
+func (staticYAMLOpts) LoadPublicCloudsYAML() (map[string]clientconfig.Cloud, error) {
+	return nil, nil
+}
+
+type recordingCache struct {
+	key string
+}
+
+func (cache *recordingCache) Get(key string) (string, error) {
+	cache.key = key
+	return "", nil
+}
+
+func (*recordingCache) Set(string, string) error { return nil }
+func (*recordingCache) Delete(string) error      { return nil }
+
+func TestWebSSOCacheNamespaceUsesExplicitCloud(t *testing.T) {
+	t.Setenv("OS_CLOUD", "environment")
+	yamlOpts := staticYAMLOpts{
+		"explicit": {
+			AuthType: clientconfig.AuthV3WebSSO,
+			AuthInfo: &clientconfig.AuthInfo{
+				AuthURL:          "http://127.0.0.1:1/v3/",
+				IdentityProvider: "idp",
+				Protocol:         "openid",
+			},
+		},
+		"environment": {
+			AuthType: clientconfig.AuthV3WebSSO,
+			AuthInfo: &clientconfig.AuthInfo{
+				AuthURL:          "http://127.0.0.1:2/v3/",
+				IdentityProvider: "other-idp",
+				Protocol:         "mapped",
+			},
+		},
+	}
+	cache := new(recordingCache)
+
+	_, _ = clientconfig.AuthenticatedClient(context.Background(), &clientconfig.ClientOpts{
+		Cloud:      "explicit",
+		YAMLOpts:   yamlOpts,
+		TokenCache: cache,
+		WebSSOBrowserOpener: func(string) error {
+			return fmt.Errorf("browser unavailable")
+		},
+	})
+	wantKey := websso.CacheKey("http://127.0.0.1:1/v3/", &websso.AuthOptions{
+		IdentityProviderName: "idp",
+		Protocol:             "openid",
+		CacheNamespace:       "explicit",
+	})
+	if cache.key != wantKey {
+		t.Fatalf("cache namespace did not use explicit cloud: got key %q, want %q", cache.key, wantKey)
+	}
+}
+
+func TestWebSSORedirectOptionsFromYAML(t *testing.T) {
+	var cloud clientconfig.Cloud
+	err := yaml.Unmarshal([]byte(`
+auth:
+  redirect_host: 127.0.0.1
+  redirect_port: 9991
+`), &cloud)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cloud.AuthInfo.RedirectHost != "127.0.0.1" || cloud.AuthInfo.RedirectPort != 9991 {
+		t.Fatalf("unexpected redirect options: %#v", cloud.AuthInfo)
+	}
+}
+
+func TestMain(m *testing.M) {
+	// Isolate tests from the caller's OpenStack environment.
+	saved := map[string]string{}
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "OS_") {
+			k, v, _ := strings.Cut(kv, "=")
+			saved[k] = v
+			os.Unsetenv(k)
+		}
+	}
+
+	code := m.Run()
+
+	for k, v := range saved {
+		os.Setenv(k, v)
+	}
+	os.Exit(code)
+}
 
 func TestGetCloudFromYAML(t *testing.T) {
 	allClientOpts := map[string]*clientconfig.ClientOpts{
@@ -54,6 +190,10 @@ func TestGetCloudFromYAML(t *testing.T) {
 			Cloud:      "disconnected_clouds",
 			RegionName: "NOWHERE",
 		},
+		"oregon":     {Cloud: "oregon"},
+		"washington": {Cloud: "washington"},
+		"montana":    {Cloud: "montana"},
+		"colorado":   {Cloud: "colorado"},
 	}
 
 	expectedClouds := map[string]*clientconfig.Cloud{
@@ -75,6 +215,10 @@ func TestGetCloudFromYAML(t *testing.T) {
 		"disconnected_smw":   &DisconnectedSomewhereCloudYAML,
 		"disconnected_anw":   &DisconnectedAnywhereCloudYAML,
 		"disconnected_now":   &DisconnectedNowhereCloudYAML,
+		"oregon":             &OregonCloudYAML,
+		"washington":         &WashingtonCloudYAML,
+		"montana":            &MontanaCloudYAML,
+		"colorado":           &ColoradoCloudYAML,
 	}
 
 	for cloud, clientOpts := range allClientOpts {
@@ -199,6 +343,44 @@ func TestAuthOptionsCreationFromCloudsYAML(t *testing.T) {
 	}
 }
 
+func TestAuthOptionsCreationFromOIDCCloudsYAML(t *testing.T) {
+	os.Unsetenv("OS_CLOUD")
+
+	allClouds := map[string]*gophercloud.AuthOptions{
+		"oregon":     OregonAuthOpts,
+		"washington": WashingtonAuthOpts,
+		"montana":    MontanaAuthOpts,
+	}
+
+	for cloud, expected := range allClouds {
+		clientOpts := &clientconfig.ClientOpts{
+			Cloud: cloud,
+		}
+
+		actual, err := clientconfig.AuthOptions(clientOpts)
+		th.AssertNoErr(t, err)
+		th.AssertDeepEquals(t, expected, actual)
+	}
+}
+
+func TestAuthOptionsCreationFromOAuth2MTLSCloudsYAML(t *testing.T) {
+	os.Unsetenv("OS_CLOUD")
+
+	allClouds := map[string]*gophercloud.AuthOptions{
+		"colorado": ColoradoAuthOpts,
+	}
+
+	for cloud, expected := range allClouds {
+		clientOpts := &clientconfig.ClientOpts{
+			Cloud: cloud,
+		}
+
+		actual, err := clientconfig.AuthOptions(clientOpts)
+		th.AssertNoErr(t, err)
+		th.AssertDeepEquals(t, expected, actual)
+	}
+}
+
 func TestAuthOptionsCreationFromLegacyCloudsYAML(t *testing.T) {
 	os.Unsetenv("OS_CLOUD")
 
@@ -251,6 +433,46 @@ func TestAuthOptionsCreationFromClientConfig(t *testing.T) {
 	}
 }
 
+func TestAuthOptionsCreationFromOIDCClientConfig(t *testing.T) {
+	os.Unsetenv("OS_CLOUD")
+
+	expectedAuthOpts := map[string]*gophercloud.AuthOptions{
+		"oregon":     OregonAuthOpts,
+		"washington": WashingtonAuthOpts,
+		"montana":    MontanaAuthOpts,
+	}
+
+	allClientOpts := map[string]*clientconfig.ClientOpts{
+		"oregon":     OregonClientOpts,
+		"washington": WashingtonClientOpts,
+		"montana":    MontanaClientOpts,
+	}
+
+	for cloud, clientOpts := range allClientOpts {
+		actualAuthOpts, err := clientconfig.AuthOptions(clientOpts)
+		th.AssertNoErr(t, err)
+		th.AssertDeepEquals(t, expectedAuthOpts[cloud], actualAuthOpts)
+	}
+}
+
+func TestAuthOptionsCreationFromOAuth2MTLSClientConfig(t *testing.T) {
+	os.Unsetenv("OS_CLOUD")
+
+	expectedAuthOpts := map[string]*gophercloud.AuthOptions{
+		"colorado": ColoradoAuthOpts,
+	}
+
+	allClientOpts := map[string]*clientconfig.ClientOpts{
+		"colorado": ColoradoClientOpts,
+	}
+
+	for cloud, clientOpts := range allClientOpts {
+		actualAuthOpts, err := clientconfig.AuthOptions(clientOpts)
+		th.AssertNoErr(t, err)
+		th.AssertDeepEquals(t, expectedAuthOpts[cloud], actualAuthOpts)
+	}
+}
+
 func TestAuthOptionsCreationFromLegacyClientConfig(t *testing.T) {
 	os.Unsetenv("OS_CLOUD")
 
@@ -272,7 +494,6 @@ func TestAuthOptionsCreationFromLegacyClientConfig(t *testing.T) {
 }
 
 func TestAuthOptionsCreationFromEnv(t *testing.T) {
-	os.Unsetenv("OS_CLOUD")
 
 	allEnvVars := map[string]map[string]string{
 		"hawaii":     HawaiiEnvAuth,
@@ -283,6 +504,10 @@ func TestAuthOptionsCreationFromEnv(t *testing.T) {
 		"nevada":     NevadaEnvAuth,
 		"texas":      TexasEnvAuth,
 		"virginia":   VirginiaEnvAuth,
+		"oregon":     OregonEnvAuth,
+		"washington": WashingtonEnvAuth,
+		"montana":    MontanaEnvAuth,
+		"colorado":   ColoradoEnvAuth,
 	}
 
 	expectedAuthOpts := map[string]*gophercloud.AuthOptions{
@@ -294,6 +519,10 @@ func TestAuthOptionsCreationFromEnv(t *testing.T) {
 		"nevada":     NevadaAuthOpts,
 		"texas":      TexasAuthOpts,
 		"virginia":   VirginiaAuthOpts,
+		"oregon":     OregonAuthOpts,
+		"washington": WashingtonAuthOpts,
+		"montana":    MontanaAuthOpts,
+		"colorado":   ColoradoAuthOpts,
 	}
 
 	for cloud, envVars := range allEnvVars {
@@ -311,7 +540,6 @@ func TestAuthOptionsCreationFromEnv(t *testing.T) {
 }
 
 func TestAuthOptionsCreationFromLegacyEnv(t *testing.T) {
-	os.Unsetenv("OS_CLOUD")
 
 	allEnvVars := map[string]map[string]string{
 		"alberta": AlbertaEnvAuth,
